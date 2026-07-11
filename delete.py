@@ -115,6 +115,14 @@ ADV_TRAINING_GENERIC_HOSTS = {
 }
 ADV_TRAINING_MAX_FOLDER_LEN = int(os.getenv("ADV_TRAINING_MAX_FOLDER_LEN", "200"))
 
+# ── NEW (script only, NOT in Lambda): hosts WITHOUT a recognised department ──
+#   INCLUDE_OTHER_DEPARTMENT=1 -> Zoom users whose "dept" field is EMPTY or
+#   NOT in the known list are processed anyway, stored under "Other/" with the
+#   generic layout:  Other/{Host}/{Year}/{Month}/{Candidate}/{Date}/{Time}/{MeetingID}/
+#   Set 0 to skip such hosts (old behaviour).
+INCLUDE_OTHER_DEPARTMENT = os.getenv("INCLUDE_OTHER_DEPARTMENT", "1").strip().lower() in {"1", "true", "yes", "y"}
+OTHER_DEPARTMENT_FOLDER = "Other"
+
 AWS_REGION = (
     os.getenv("AWS_REGION")
     or os.getenv("AWS_DEFAULT_REGION")
@@ -139,6 +147,9 @@ DEPARTMENT_PRIORITY = [
     "CEO",
     "Executive-Assistant",
     "Techsphere",
+    "QMS",
+    "Business-Development",
+    "Other",   # NEW (script only): hosts with empty/unknown Zoom department
 ]
 
 # ── UPDATED: matches the Lambda (CC removed so folder trees stay identical) ───
@@ -207,6 +218,26 @@ def build_allowed_departments():
     add_alias("advance-training", "Advanced-Training")
     add_alias("advance training", "Advanced-Training")
     add_alias("advance_training", "Advanced-Training")
+
+    # NEW — QMS department (same aliases as the Lambda)
+    add_alias("qms", "QMS")
+    add_alias("q.m.s", "QMS")
+    add_alias("q.m.s.", "QMS")
+    add_alias("q m s", "QMS")
+    add_alias("quality management", "QMS")
+    add_alias("quality management system", "QMS")
+    add_alias("quality-management-system", "QMS")
+    add_alias("quality_management_system", "QMS")
+
+    # NEW — Business-Development department (same aliases as the Lambda)
+    add_alias("business-development", "Business-Development")
+    add_alias("business development", "Business-Development")
+    add_alias("business_development", "Business-Development")
+    add_alias("businessdevelopment", "Business-Development")
+    add_alias("bd", "Business-Development")
+    add_alias("b.d.", "Business-Development")
+    add_alias("biz dev", "Business-Development")
+    add_alias("bizdev", "Business-Development")
 
     return aliases
 
@@ -1165,6 +1196,9 @@ def extract_candidate_from_topic_fallback(topic: str):
         "Techsphere",
         "Tech Sphere",
         "Tech-Sphere",
+        "QMS",
+        "Business Development",
+        "Business-Development",
     ):
         if cleaned.lower().startswith(prefix.lower()):
             cleaned = cleaned[len(prefix):].strip(" :-_")
@@ -2387,6 +2421,7 @@ def main():
     print(f"FOLDER_CACHE_TTL_SEC              = {FOLDER_CACHE_TTL_SEC}")
     print(f"ADV_TRAINING_GENERIC_HOSTS        = {sorted(ADV_TRAINING_GENERIC_HOSTS)}")
     print(f"ADV_TRAINING_MAX_FOLDER_LEN       = {ADV_TRAINING_MAX_FOLDER_LEN}")
+    print(f"INCLUDE_OTHER_DEPARTMENT          = {INCLUDE_OTHER_DEPARTMENT}")
 
     if DELETE_ACTION not in {"trash", "delete"}:
         raise RuntimeError("DELETE_ACTION must be either 'trash' or 'delete'")
@@ -2399,11 +2434,17 @@ def main():
 
     users_by_department = {dept: [] for dept in DEPARTMENT_PRIORITY}
     for user in users:
-        dept_folder = normalize_department(user.get("dept") or "")
+        raw_dept = (user.get("dept") or "").strip()
+        dept_folder = normalize_department(raw_dept)
         email = (user.get("email") or "").strip().lower()
 
+        # NEW (script only): empty/unknown department -> "Other"
         if not dept_folder:
-            continue
+            if INCLUDE_OTHER_DEPARTMENT:
+                dept_folder = OTHER_DEPARTMENT_FOLDER
+                print(f"[OTHER] host={email or user.get('id')} raw_dept={raw_dept!r} -> {OTHER_DEPARTMENT_FOLDER}")
+            else:
+                continue
         if dept_folder not in TARGET_DEPARTMENTS:
             continue
         if ONLY_HOST_EMAIL and email != ONLY_HOST_EMAIL:
